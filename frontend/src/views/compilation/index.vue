@@ -3,13 +3,18 @@
     <header class="page-head">
       <div>
         <h2>数据整编管理</h2>
-        <p class="page-desc">维护整编成果，围绕成果编号、整编年份、站点编号、整编类型做登记、筛选与状态流转。</p>
+        <p class="page-desc">维护整编成果，围绕成果编号、整编年份、站点编号、整编类型做登记、筛选与状态流转；整编清单与水位预警引用同一已发布阈值版本。</p>
       </div>
       <div class="page-actions">
         <button class="btn primary" type="button" @click="openCreate">登记整编成果</button>
         <button class="btn" type="button" @click="exportRows">导出数据整编清单</button>
       </div>
     </header>
+
+    <p class="version-line">
+      整编清单统一引用阈值发布版本：<strong>{{ activeVersionNo }}</strong>
+      （待整编/整编中的成果随发布自动切换；已刊印成果保留发布时的版本号）。
+    </p>
 
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
@@ -74,6 +79,7 @@
 import { computed, onMounted, ref } from 'vue'
 
 import {
+  activeVersion,
   downloadEntries,
   listEntries,
   moduleMeta,
@@ -82,13 +88,14 @@ import {
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('compilation')
-const columns = ["成果编号", "整编年份", "站点编号", "整编类型", "原始记录数", "整编人", "审核人", "整编状态"]
+const columns = ["成果编号", "整编年份", "站点编号", "整编类型", "引用阈值版本", "原始记录数", "整编人", "审核人", "整编状态"]
 const actions = ["开始整编", "提交审核", "驳回整编"]
 const statuses = ["待整编", "整编中", "待审核", "已刊印", "已驳回"]
 const stats = [{"label": "待整编年度", "value": 0}, {"label": "整编中年度", "value": 0}, {"label": "已刊印成果", "value": 0}]
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
+const activeVersionNo = ref(activeVersion()?.versionNo ?? '暂无生效版本')
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
@@ -128,6 +135,7 @@ function reload() {
     const payload = listEntries(meta.key, filters.value)
     rows.value = payload.items
     total.value = payload.total
+    activeVersionNo.value = activeVersion()?.versionNo ?? '暂无生效版本'
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '数据整编列表读取失败'
   }

@@ -1,6 +1,42 @@
 import { MODULE_BY_KEY } from '@/data/modules'
 import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
 import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
+import { HOME_STATION } from '@/stores/session'
+import {
+  deactivateActiveVersion,
+  listThresholdRows,
+  publishCandidate,
+  thresholdState,
+} from './threshold-service'
+
+export {
+  activeVersion,
+  candidateVersion,
+  deactivateActiveVersion,
+  discardCandidate,
+  evaluateWaterWarnings,
+  generateCandidate,
+  listThresholdRows,
+  publishCandidate,
+  refreshWaterlevelWarnings,
+  removeDraft,
+  resetThresholdState,
+  switchTerminal,
+  thresholdState,
+  upsertDraft,
+  LEGACY_DEFAULT_TIME,
+  MONITOR_TYPES,
+  WATER_LEVEL_TYPE,
+} from './threshold-service'
+export type {
+  CoverageZone,
+  DraftInput,
+  MergeNote,
+  ThresholdItem,
+  ThresholdState,
+  ThresholdVersion,
+  WaterWarningRow,
+} from './threshold-service'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
 const NEGATIVE_ACTIONS = ['撤销', '作废', '拒绝', '驳回', '停用', '忽略', '下线', '回滚']
@@ -24,12 +60,32 @@ export function filterRows(rows: EntryRow[], filters: Record<string, string>): E
 }
 
 export function listEntries(key: string, filters: Record<string, string> = {}): PageResult {
+  // 预警阈值走版本域：清单按草稿/候选/生效/停用版本展平，状态流转不再改单条记录。
+  if (key === 'warning') {
+    const matched = listThresholdRows(filters)
+    return { items: matched, total: matched.length, page: 1, size: matched.length }
+  }
   const matched = filterRows(listRows(key), filters)
   return { items: matched, total: matched.length, page: 1, size: matched.length }
 }
 
 export function runAction(key: string, id: number, action: string): ActionResult {
   const meta = moduleMeta(key)
+  // 预警阈值沿现有「发布生效 / 停用配置」动作，但落到版本域（记录 id 不参与）：
+  // 发布只接受候选版本，停用只停用当前生效版本，停用后不能在单条记录上重新启用。
+  if (key === 'warning') {
+    const state = thresholdState()
+    const actor = { stationCode: HOME_STATION, operator: '值班管理员', terminalId: state.terminalId }
+    if (action === '发布生效') {
+      return publishCandidate(actor)
+    }
+    if (action === '停用配置') {
+      return deactivateActiveVersion('值班人员沿动作停用配置', actor)
+    }
+    if (action === '调整阈值') {
+      return { ok: false, message: '请在草稿区登记或调整本站阈值，再从草稿生成候选版本' }
+    }
+  }
   const target = meta.actionTargets[action]
   if (!target) {
     return { ok: false, message: `${meta.entity}没有登记「${action}」这个动作` }
@@ -65,7 +121,8 @@ export function exportEntries(key: string): { filename: string; content: string 
   const meta = moduleMeta(key)
   const header = ['编号', ...meta.fields, '当前状态']
   const lines = [header.join(',')]
-  for (const row of listRows(key)) {
+  const rows = key === 'warning' ? listThresholdRows() : listRows(key)
+  for (const row of rows) {
     lines.push([row.id, ...meta.fields.map((field) => row[field] ?? ''), row.status].join(','))
   }
   return { filename: `${meta.name}-清单.csv`, content: `\uFEFF${lines.join('\n')}` }
@@ -86,10 +143,11 @@ export function downloadEntries(key: string): void {
 
 export function loadOverview(): OverviewResult {
   const rows = allRows()
-  const modules = [...MODULE_BY_KEY.values()].map((meta) => {
-    const entries = rows[meta.key] ?? []
+  const modules = [...MODULE_BY_KEY.values()].map((moduleMeta) => {
+    // 预警阈值的台账口径来自版本域：草稿 + 候选 + 生效 + 停用归档的展平行。
+    const entries = moduleMeta.key === 'warning' ? listThresholdRows() : rows[moduleMeta.key] ?? []
     return {
-      name: meta.name,
+      name: moduleMeta.name,
       created: entries.length,
       pending: entries.filter((row) => row.pending).length,
       abnormal: entries.filter((row) => row.abnormal).length,
