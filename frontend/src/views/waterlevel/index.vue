@@ -11,6 +11,10 @@
       </div>
     </header>
 
+    <p class="info-bar">
+      水位预警引用阈值版本：{{ versionLabel }}（与数据整编清单引用同一版本）
+    </p>
+
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
@@ -37,6 +41,7 @@
       <thead>
         <tr>
           <th v-for="column in columns" :key="column">{{ column }}</th>
+          <th>预警级别</th>
           <th>当前状态</th>
           <th>可执行动作</th>
         </tr>
@@ -44,6 +49,9 @@
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td>
+            <span class="level-tag" :class="`level-${alarmOf(row).tone}`">{{ alarmOf(row).level }}</span>
+          </td>
           <td>{{ row.status }}</td>
           <td class="row-actions">
             <button
@@ -58,7 +66,36 @@
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无水位监测数据，可先登记水位记录</td>
+          <td :colspan="columns.length + 3" class="empty-state">暂无水位监测数据，可先登记水位记录</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 class="section-title">水位预警清单（引用版本：{{ versionLabel }}）</h3>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>记录编号</th>
+          <th>站点编号</th>
+          <th>观测时间</th>
+          <th>当前水位</th>
+          <th>预警级别</th>
+          <th>引用版本</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="row in alarmRows" :key="String(row.id)">
+          <td>{{ row['记录编号'] }}</td>
+          <td>{{ row['站点编号'] }}</td>
+          <td>{{ row['观测时间'] }}</td>
+          <td>{{ row['当前水位'] }}</td>
+          <td>
+            <span class="level-tag" :class="`level-${alarmOf(row).tone}`">{{ alarmOf(row).level }}</span>
+          </td>
+          <td>{{ alarmOf(row).version ?? '—' }}</td>
+        </tr>
+        <tr v-if="!alarmRows.length">
+          <td colspan="6" class="empty-state">当前水位记录均未触及已发布阈值</td>
         </tr>
       </tbody>
     </table>
@@ -79,19 +116,42 @@ import {
   moduleMeta,
   runAction as applyAction,
 } from '@/api/local-service'
-import type { EntryRow } from '@/data/types'
+import { evaluateWaterLevel, publishedVersionFor } from '@/api/warning-service'
+import type { EntryRow, WarningVersion } from '@/data/types'
+import { useSessionStore } from '@/stores/session'
 
 const meta = moduleMeta('waterlevel')
+const session = useSessionStore()
 const columns = ["记录编号", "站点编号", "观测时间", "当前水位", "警戒水位", "保证水位", "水位变幅", "记录状态"]
 const actions = ["提交审核", "确认通过", "标记异常"]
 const statuses = ["已采集", "待审核", "已通过", "异常值"]
-const stats = [{"label": "今日采集数", "value": 0}, {"label": "超警戒站次", "value": 0}, {"label": "待审核记录", "value": 0}]
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+const publishedVersion = ref<WarningVersion | null>(null)
+
+const versionLabel = computed(() =>
+  publishedVersion.value ? publishedVersion.value.版本号 : '尚未发布',
+)
+// 水位异常取数：不再看记录上的异常标记，统一按已发布阈值版本判定。
+const alarmOf = (row: EntryRow) =>
+  evaluateWaterLevel(String(row['站点编号'] ?? ''), row['当前水位'])
+const alarmRows = computed(() =>
+  rows.value.filter((row) => !['正常', '未发布阈值'].includes(alarmOf(row).level)),
+)
+const stats = computed(() => [
+  { label: '今日采集数', value: rows.value.length },
+  {
+    label: '超警戒站次',
+    value: rows.value.filter((row) =>
+      ['黄色预警', '橙色预警', '红色预警'].includes(alarmOf(row).level),
+    ).length,
+  },
+  { label: '待审核记录', value: rows.value.filter((row) => String(row.status) === '待审核').length },
+])
 const statusSummary = computed(() =>
   statuses.map((status: string) => ({
     status,
@@ -128,6 +188,7 @@ function reload() {
     const payload = listEntries(meta.key, filters.value)
     rows.value = payload.items
     total.value = payload.total
+    publishedVersion.value = publishedVersionFor(session.stationCode)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '水位监测列表读取失败'
   }

@@ -11,6 +11,10 @@
       </div>
     </header>
 
+    <p class="info-bar">
+      整编清单引用阈值版本：{{ versionLabel }}（与水位预警清单引用同一版本）
+    </p>
+
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
@@ -79,9 +83,12 @@ import {
   moduleMeta,
   runAction as applyAction,
 } from '@/api/local-service'
-import type { EntryRow } from '@/data/types'
+import { publishedVersionFor } from '@/api/warning-service'
+import type { EntryRow, WarningVersion } from '@/data/types'
+import { useSessionStore } from '@/stores/session'
 
 const meta = moduleMeta('compilation')
+const session = useSessionStore()
 const columns = ["成果编号", "整编年份", "站点编号", "整编类型", "原始记录数", "整编人", "审核人", "整编状态"]
 const actions = ["开始整编", "提交审核", "驳回整编"]
 const statuses = ["待整编", "整编中", "待审核", "已刊印", "已驳回"]
@@ -92,6 +99,10 @@ const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+const publishedVersion = ref<WarningVersion | null>(null)
+const versionLabel = computed(() =>
+  publishedVersion.value ? publishedVersion.value.版本号 : '尚未发布',
+)
 const statusSummary = computed(() =>
   statuses.map((status: string) => ({
     status,
@@ -128,6 +139,7 @@ function reload() {
     const payload = listEntries(meta.key, filters.value)
     rows.value = payload.items
     total.value = payload.total
+    publishedVersion.value = publishedVersionFor(session.stationCode)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '数据整编列表读取失败'
   }
